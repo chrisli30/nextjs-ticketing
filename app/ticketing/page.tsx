@@ -1,12 +1,17 @@
 "use client";
 
-import { useState } from "react";
-import styled from "styled-components";
+import { useContext, useState } from "react";
+import styled, { DefaultTheme, ThemeProvider } from "styled-components";
 import SVGIcons from "@/components/SVGIcons";
-import { INITIAL_SEAT_MAP } from "@/components/constants";
+import { INITIAL_SEAT_MAP, SELECTED } from "@/components/constants";
 import IconSelected from "@/components/IconSelected";
 import IconReserved from "@/components/IconReserved";
 import IconAvailable from "@/components/IconAvailable";
+import { useBooking } from "@/hooks/useBooking";
+import { BookingContext } from "@/context/BookingContext";
+import { copyFile } from "fs";
+import { ThemeContext } from "@/context/ThemeContext";
+import { useTheme } from "@/hooks/useTheme";
 // Component to inject the icon created through a symbol element
 // Render the svg icon using the href passed as props
 const Icon = ({
@@ -35,19 +40,7 @@ const HeaderContainer = styled.div`
   display: flex;
   align-items: center;
   margin-top: 1rem;
-  position: relative;
-
-  &:before {
-    position: absolute;
-    content: "";
-    bottom: calc(100% + 1rem);
-    left: 50%;
-    transform: translateX(-50%);
-    width: 1rem;
-    height: 0.3rem;
-    border-radius: 15px;
-    background: hsl(0, 0%, 90%);
-  }
+ 
 `;
 const HeaderTitle = styled.h1`
   font-size: 1.5rem;
@@ -253,7 +246,7 @@ const CheckoutAction = styled.span`
 
 // phone screen as a rounded box with a noticeable shadow
 // update the custom properties according to the theme variable
-const Screen = styled.div`
+const Screen = styled.div<{ theme: string }>`
   --color: ${({ theme }) => (theme === "light" ? "#2c2f62" : "#eee")};
   --background: ${({ theme }) => (theme === "light" ? "#fff" : "#2c2f62")};
   --accent: ${({ theme }) => (theme === "light" ? "#fd6d8e" : "#fcb43c")};
@@ -267,17 +260,50 @@ const Screen = styled.div`
   margin: 1rem;
 `;
 
+const ThemeSection = styled.div`
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 1rem;
+   position: relative;
+
+  &:before {
+    position: absolute;
+    content: "";
+    bottom: calc(100% + 1rem);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 1rem;
+    height: 0.3rem;
+    border-radius: 15px;
+    background: hsl(0, 0%, 90%);
+  }
+`;
+
+const ThemeToggleButton = styled.button<{ theme: string }>`
+  --color: ${({ theme }) => (theme === "dark" ? "#2c2f62" : "#eee")};
+  --background: ${({ theme }) => (theme === "dark" ? "#fff" : "#2c2f62")};
+  background: var(--background, #ffffff);
+  color: var(--color, #2c2f62);
+  border-radius: 6px;
+  padding: 0px 12px;
+  
+`;
+
 /******************* Logic: Start updating from here ************************/
 
 // render the two buttons making use of the Icon component
 const Header = () => {
-  const buttons = ["plus", "minus"];
+  const { removeRandomSeat, addRandomSeat } = useContext(BookingContext);
+  const buttons = [
+    { icons: "minus", fn: removeRandomSeat },
+    { icons: "plus", fn: addRandomSeat },
+  ];
   return (
     <HeaderContainer>
       <HeaderTitle>Choose Seats</HeaderTitle>
       {buttons.map((button) => (
-        <HeaderButton key={button}>
-          <Icon href={button} size="28" />
+        <HeaderButton key={button.icons} onClick={button.fn}>
+          <Icon href={button.icons} size={28} />
         </HeaderButton>
       ))}
     </HeaderContainer>
@@ -288,6 +314,8 @@ const Header = () => {
  * Load icon files from svg. There's no need to change this component.
  */
 const Legend = () => {
+  const { getTotalSelected, getTotalAvailable } = useContext(BookingContext);
+
   return (
     <>
       <div style={{ display: "none" }}>
@@ -295,7 +323,7 @@ const Legend = () => {
       </div>
       <LegendContainer>
         <LegendItem>
-          <IconAvailable size={16} number={5} />
+          <IconAvailable size={16} number={getTotalAvailable()} />
           <LegendItemName>Available</LegendItemName>
         </LegendItem>
         <LegendItem>
@@ -303,7 +331,7 @@ const Legend = () => {
           <LegendItemName>Reserved</LegendItemName>
         </LegendItem>
         <LegendItem>
-          <IconSelected size={16} number={5} />
+          <IconSelected size={16} number={getTotalSelected()} />
           <LegendItemName>Selected</LegendItemName>
         </LegendItem>
       </LegendContainer>
@@ -314,21 +342,22 @@ const Legend = () => {
 /**
  * Render the grid of seats
  */
-const Theater = ({
-  seats = [],
-  onSeatClick,
-}: {
-  seats: string[];
-  onSeatClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
-}) => {
+const Theater = () => {
   // four FillerSeat components, occupying the selected space in the group
+  const { seats, onSeatClick } = useContext(BookingContext);
+
   const FillerSeats = Array(4)
     .fill("")
     .map((item, i) => <FillerSeat key={i} />);
 
   const Seats = seats.map((seat, i) => (
-    <Seat onClick={onSeatClick} data-index={i} data-status={seat} key={i}>
-      <Icon href={seat} size="16" />
+    <Seat
+      onClick={() => onSeatClick(seat, i)}
+      data-index={i}
+      data-status={seat}
+      key={i}
+    >
+      <Icon href={seat} size={16} />
     </Seat>
   ));
 
@@ -344,25 +373,26 @@ const Theater = ({
 };
 
 // for each selected seat include a button with the close icon
-const Details = ({
-  selectedSeats = [],
-}: {
-  selectedSeats?: { seat: number; price: number }[];
-}) => {
+const Details = () => {
   // in the button include the text in the following format
   // row: 7 seat: 4 price: $16
+  const { getSelectedSeatsData, removeSeat } = useContext(BookingContext);
   return (
     <DetailsContainer>
       <DetailsHeading>Details</DetailsHeading>
-      {selectedSeats.map((selectedSeat) => {
+      {getSelectedSeatsData().map((selectedSeat) => {
         const entries = Object.entries(selectedSeat);
         return (
-          <DetailsButton key={entries[0][1]} data-index={entries[0][1]}>
+          <DetailsButton
+            key={entries[0][1]}
+            data-index={entries[0][1]}
+            onClick={() => removeSeat(selectedSeat.seat)}
+          >
             {entries
               .map(([property, value]) => `${property}: ${value}`)
               .join(" ")
               .trim()}
-            <Icon href="close" size="12" />
+            <Icon href="close" size={12} />
           </DetailsButton>
         );
       })}
@@ -371,26 +401,43 @@ const Details = ({
 };
 
 const Checkout = () => {
+  const { getTotalPrice } = useContext(BookingContext);
+
   return (
     <CheckoutContainer>
-      <CheckoutTotal>${135}</CheckoutTotal>
+      <CheckoutTotal>${getTotalPrice()}</CheckoutTotal>
       <CheckoutAction>Checkout</CheckoutAction>
     </CheckoutContainer>
+  );
+};
+
+const ThemeContainer = () => {
+  const { theme, toggleTheme } = useContext(ThemeContext);
+  return (
+    <ThemeSection>
+      <ThemeToggleButton type="button" onClick={toggleTheme} theme={theme}>
+        {theme === "dark" ? "light" : "dark"}
+      </ThemeToggleButton>
+    </ThemeSection>
   );
 };
 
 // render the components making up the screen
 // use the theme in the styled component
 // pass the array of seats and the sum to the fitting components
-const Phone = ({ seats }: { seats: string[] }) => (
-  <Screen theme="dark">
-    <Header />
-    <Legend />
-    <Theater seats={seats} />
-    <Details />
-    <Checkout />
-  </Screen>
-);
+const Phone = () => {
+  const { theme } = useContext(ThemeContext);
+  return (
+    <Screen theme={theme}>
+      <ThemeContainer />
+      <Header />
+      <Legend />
+      <Theater />
+      <Details />
+      <Checkout />
+    </Screen>
+  );
+};
 
 /**
  * Page component to manage the state of the application and render the phone screen(s)
@@ -402,12 +449,16 @@ const Phone = ({ seats }: { seats: string[] }) => (
  * Each seat has a price of 10, configured in the SEAT_PRICE constant
  */
 const TicketingPage = () => {
-  const [seats, setSeats] = useState(INITIAL_SEAT_MAP);
-
+  const ticketsManager = useBooking(INITIAL_SEAT_MAP);
+  const themeManager = useTheme();
   return (
-    <div className="app w-full flex items-center justify-center">
-      <Phone seats={seats} />
-    </div>
+    <ThemeContext.Provider value={themeManager}>
+      <BookingContext.Provider value={ticketsManager}>
+        <div className="app w-full flex items-center justify-center">
+          <Phone />
+        </div>
+      </BookingContext.Provider>
+    </ThemeContext.Provider>
   );
 };
 

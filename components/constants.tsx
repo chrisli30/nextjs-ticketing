@@ -89,5 +89,7 @@ export const INITIAL_SEAT_MAP = [
   "reserved",
 ];
 
-
 export const SEAT_PRICE = 10;
+export const AVAILABLE = "available";
+export const RESERVED = "reserved";
+export const SELECTED = "selected";
